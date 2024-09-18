@@ -135,7 +135,7 @@ def train_one_epoch(
         aux_loss.backward()
         aux_optimizer.step()
 
-        if i % 1000 == 0:
+        if i % 100 == 0:
             if type == 'mse':
                 print(
                     f"Train epoch {epoch}: ["
@@ -338,8 +338,8 @@ def main(argv):
     )
 
 
-    train_dataset = ImageFolder(args.dataset, split="train", transform=train_transforms)
-    test_dataset = ImageFolder(args.dataset, split="test", transform=test_transforms)
+    train_dataset = ImageFolder(args.dataset, split="", transform=train_transforms)
+    test_dataset = ImageFolder(args.dataset, split="", transform=test_transforms)
 
     device = "cuda" if args.cuda and torch.cuda.is_available() else "cpu"
     print(device)

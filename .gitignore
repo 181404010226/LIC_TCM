@@ -3,6 +3,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 run.sh
+*.tar
+*.0
+*.bin
+*.json
+*.png
+*.txt
 
 # C extensions
 *.so
