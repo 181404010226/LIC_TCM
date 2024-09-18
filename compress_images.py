@@ -78,11 +78,13 @@ def main():
                 for s in out_enc["strings"]:
                     f.write(s[0])
             
-            # 保存额外信息到JSON文件
+            # 保存额外信息到JSON文件，包括每个字符串的长度
             extra_info = {
                 "shape": out_enc["shape"],
-                "padding": padding
+                "padding": padding,
+                "string_lengths": [len(s[0]) for s in out_enc["strings"]]
             }
+            
             with open(output_json_path, 'w') as f:
                 json.dump(extra_info, f)
             
