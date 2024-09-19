@@ -19,7 +19,7 @@ def pack_bin_files(input_dir, output_zip):
         # 遍历输入目录
         for root, _, files in os.walk(input_dir):
             for file in files:
-                if file.endswith('.bin'):
+                if file.endswith('.bin') or file.endswith('.json'):
                     file_path = os.path.join(root, file)
                     # 将文件添加到zip文件中，使用相对路径
                     arcname = os.path.relpath(file_path, input_dir)
