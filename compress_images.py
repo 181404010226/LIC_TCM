@@ -12,6 +12,7 @@ def parse_args():
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to the checkpoint file")
     parser.add_argument("--input_dir", type=str, default="/root/autodl-tmp/AerialImageDataset/train/images_split", help="Directory containing input images")
     parser.add_argument("--output_dir", type=str, default="compressed", help="Directory to save compressed images")
+    parser.add_argument("--N", type=int, default=128, help="N")
     parser.add_argument("--cuda", action="store_true", help="Use CUDA if available")
     return parser.parse_args()
 
@@ -46,7 +47,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     
     # 加载模型
-    net = TCM(config=[2,2,2,2,2,2], head_dim=[8, 16, 32, 32, 16, 8], drop_path_rate=0.0, N=128, M=320)
+    net = TCM(config=[2,2,2,2,2,2], head_dim=[8, 16, 32, 32, 16, 8], drop_path_rate=0.0, N=args.N, M=320)
     net = net.to(device)
     net.eval()
     
@@ -68,7 +69,7 @@ def main():
             x = transforms.ToTensor()(img).unsqueeze(0).to(device)
             
             # 填充图像
-            x_padded, padding = pad(x, 128)
+            x_padded, padding = pad(x, args.N)
             
             with torch.no_grad():
                 out_enc = net.compress(x_padded)

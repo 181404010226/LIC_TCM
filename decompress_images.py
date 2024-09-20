@@ -16,6 +16,7 @@ def parse_args():
     parser.add_argument("--output", type=str, default="assembled_image.png", help="Output PNG file name")
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to the model checkpoint file")
     parser.add_argument("--cuda", action="store_true", help="Use CUDA if available")
+    parser.add_argument("--N", type=int, default=128, help="N")
     parser.add_argument("--grid_size", type=int, default=19, help="Grid size (e.g., 18 for 18x18)")
     return parser.parse_args()
 
@@ -42,7 +43,7 @@ def crop(x, padding):
     )
 
 def load_model(checkpoint_path, device):
-    net = TCM(config=[2,2,2,2,2,2], head_dim=[8, 16, 32, 32, 16, 8], drop_path_rate=0.0, N=128, M=320)
+    net = TCM(config=[2,2,2,2,2,2], head_dim=[8, 16, 32, 32, 16, 8], drop_path_rate=0.0, N=args.N, M=320)
     net = net.to(device)
     net.eval()
 
