@@ -3,7 +3,7 @@ import os
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QComboBox, QSizePolicy
 )
-from PyQt5.QtGui import QPixmap, QImage, QTransform
+from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPoint
 import torch
 from PIL import Image
@@ -21,16 +21,25 @@ class ImageLoaderThread(QThread):
         self.bin_path = bin_path
         self.grid_size = grid_size
         self.device = device
+        self._is_running = True  # 添加运行标志
 
     def run(self):
         images = []
         for i, j, bin_path in self.bin_files:
+            if not self._is_running:
+                print("ImageLoaderThread 已被停止。")
+                break  # 检查是否停止线程
+
             json_filename = f"{os.path.splitext(os.path.basename(bin_path))[0]}.json"
             json_path = os.path.join(self.bin_path, json_filename)
             if not os.path.exists(json_path):
                 print(f"JSON file {json_path} not found for bin file {bin_path}. Skipping.")
                 continue
-            x_hat = decompress_bin_file(self.net, bin_path, json_path, self.device)
+            try:
+                x_hat = decompress_bin_file(self.net, bin_path, json_path, self.device)
+            except Exception as e:
+                print(f"Error decompressing {bin_path}: {e}")
+                continue
             images.append({'position': (j, i), 'image': x_hat.squeeze(0)})
 
             # 组装当前已加载的图像网格
@@ -45,7 +54,11 @@ class ImageLoaderThread(QThread):
             self.progress.emit(pixmap)
 
         # 加载完成后发送最终的图像
-        self.progress.emit(pixmap)
+        if images and self._is_running:
+            self.progress.emit(pixmap)
+
+    def stop(self):
+        self._is_running = False  # 设置运行标志为 False
 
 
 class SatelliteImageViewer(QWidget):
@@ -60,18 +73,19 @@ class SatelliteImageViewer(QWidget):
         self.scale_factor = 1.0  # 缩放因子
         self.pixmap = None
         self.last_mouse_position = QPoint()
+        self.thread = None  # 当前的线程引用
         self.initUI()
 
     def initUI(self):
         layout = QVBoxLayout()
 
-        # 创建前缀下拉列表和加载按钮
+        # 创建前缀下拉列表和加载标签
         input_layout = QHBoxLayout()
         self.prefix_combo = QComboBox()
-        self.load_button = QLabel("请选择前缀")
+        self.load_label = QLabel("请选择前缀")
         self.load_prefixes()
         self.prefix_combo.currentIndexChanged.connect(self.load_image)
-        input_layout.addWidget(self.load_button)
+        input_layout.addWidget(self.load_label)
         input_layout.addWidget(self.prefix_combo)
         layout.addLayout(input_layout)
 
@@ -102,6 +116,11 @@ class SatelliteImageViewer(QWidget):
         self.prefix_combo.addItems(sorted(prefixes))
 
     def load_image(self):
+        # 如果已有线程正在运行，先停止它
+        if self.thread and self.thread.isRunning():
+            self.thread.stop()
+            self.thread.wait()
+
         prefix = self.prefix_combo.currentText()
         if not prefix:
             return
@@ -155,6 +174,7 @@ class SatelliteImageViewer(QWidget):
         self.scale_factor *= factor
         self.scale_factor = max(0.1, min(self.scale_factor, 5))
         self.refresh_image()
+        event.accept()  # 阻止事件进一步传播
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -172,6 +192,13 @@ class SatelliteImageViewer(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.last_mouse_position = QPoint()
+
+    def closeEvent(self, event):
+        # 确保线程在关闭应用前被干净地停止
+        if self.thread and self.thread.isRunning():
+            self.thread.stop()
+            self.thread.wait()
+        event.accept()
 
 
 if __name__ == '__main__':
