@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPoint
 import torch
 from PIL import Image
 import numpy as np
+from collections import deque
 from decompress_images import load_model, decompress_bin_file, assemble_grid
 
 
@@ -22,10 +23,15 @@ class ImageLoaderThread(QThread):
         self.grid_size = grid_size
         self.device = device
         self._is_running = True  # 添加运行标志
+        self.center_position = (0, 0)  # 添加中心位置属性
+
+    def set_center_position(self, position):
+        self.center_position = position
 
     def run(self):
         images = []
         for i, j, bin_path in self.bin_files:
+            # print(f"当前中心位置: {self.center_position}")
             if not self._is_running:
                 print("ImageLoaderThread 已被停止。")
                 break  # 检查是否停止线程
@@ -74,6 +80,7 @@ class SatelliteImageViewer(QWidget):
         self.pixmap = None
         self.last_mouse_position = QPoint()
         self.thread = None  # 当前的线程引用
+        self.center_position = (0, 0)
         self.initUI()
 
     def initUI(self):
@@ -150,6 +157,7 @@ class SatelliteImageViewer(QWidget):
         # 启动图像加载线程
         self.thread = ImageLoaderThread(self.net, bin_files, self.bin_path, self.grid_size, self.device)
         self.thread.progress.connect(self.update_image)
+        self.thread.set_center_position(self.center_position)  # 添加这行
         self.thread.start()
 
     def update_image(self, pixmap):
@@ -166,19 +174,16 @@ class SatelliteImageViewer(QWidget):
             self.image_label.setPixmap(scaled_pixmap)
             self.image_label.resize(scaled_pixmap.size())
 
-    def wheelEvent(self, event):
-        if not self.pixmap:
-            return
-        angle = event.angleDelta().y()
-        factor = 1.1 if angle > 0 else 0.9
-        self.scale_factor *= factor
-        self.scale_factor = max(0.1, min(self.scale_factor, 5))
-        self.refresh_image()
-        event.accept()  # 阻止事件进一步传播
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.last_mouse_position = event.globalPos()
+    def update_center_position(self):
+        if self.pixmap:
+            viewport_center = self.scroll_area.viewport().rect().center()
+            scroll_pos = QPoint(self.scroll_area.horizontalScrollBar().value(),
+                                self.scroll_area.verticalScrollBar().value())
+            image_pos = viewport_center + scroll_pos
+            self.center_position = (image_pos.x() / self.scale_factor, image_pos.y() / self.scale_factor)
+            
+            if self.thread and self.thread.isRunning():
+                self.thread.set_center_position(self.center_position)
 
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.LeftButton and self.pixmap:
@@ -188,6 +193,23 @@ class SatelliteImageViewer(QWidget):
                 self.scroll_area.horizontalScrollBar().value() - delta.x())
             self.scroll_area.verticalScrollBar().setValue(
                 self.scroll_area.verticalScrollBar().value() - delta.y())
+            self.update_center_position()  # 添加这行
+
+    def wheelEvent(self, event):
+        if not self.pixmap:
+            return
+        angle = event.angleDelta().y()
+        factor = 1.1 if angle > 0 else 0.9
+        self.scale_factor *= factor
+        self.scale_factor = max(0.1, min(self.scale_factor, 5))
+        self.refresh_image()
+        self.update_center_position()  # 添加这行
+        event.accept()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.last_mouse_position = event.globalPos()
+
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
