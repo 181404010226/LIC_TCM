@@ -9,17 +9,23 @@ import torch.optim as optim
 
 from torch.utils.data import DataLoader
 from torchvision import transforms
-
-from compressai.datasets import ImageFolder
 from compressai.zoo import models
 from pytorch_msssim import ms_ssim
 
+import random
 from models import TCM
 from torch.utils.tensorboard import SummaryWriter   
 import os
 
 torch.backends.cudnn.deterministic=True
 torch.backends.cudnn.benchmark=False
+from pathlib import Path
+from PIL import Image
+from torch.utils.data import Dataset
+
+import torchvision.utils as vutils
+import matplotlib.pyplot as plt
+import io
 
 def compute_msssim(a, b):
     return ms_ssim(a, b, data_range=1.)
@@ -50,6 +56,40 @@ class RateDistortionLoss(nn.Module):
             out["loss"] = self.lmbda * (1 - out['ms_ssim_loss']) + out["bpp_loss"]
 
         return out
+
+class ImageFolder(Dataset):
+    """Custom ImageFolder dataset for loading images recursively from a directory with sharding support."""
+
+    def __init__(self, root, transform=None, num_shards=1, shard_index=0):
+        self.root = Path(root)
+        self.transform = transform
+        self.num_shards = num_shards
+        self.shard_index = shard_index
+        self.samples = self._collect_samples()
+
+    def _collect_samples(self):
+        all_samples = []
+        for ext in ('*.jpg', '*.jpeg', '*.png'):
+            all_samples.extend(self.root.rglob(ext))
+        
+        # Sort and shard the samples
+        all_samples = sorted(all_samples)
+        total_samples = len(all_samples)
+        samples_per_shard = total_samples // self.num_shards
+        start_index = self.shard_index * samples_per_shard
+        end_index = start_index + samples_per_shard if self.shard_index < self.num_shards - 1 else total_samples
+        
+        return all_samples[start_index:end_index]
+
+    def __getitem__(self, index):
+        img_path = self.samples[index]
+        img = Image.open(img_path).convert("RGB")
+        if self.transform:
+            img = self.transform(img)
+        return img
+
+    def __len__(self):
+        return len(self.samples)
 
 
 class AverageMeter:
@@ -111,12 +151,21 @@ def configure_optimizers(net, args):
     )
     return optimizer, aux_optimizer
 
+def estimate_bpp(out_net):
+    size = out_net['x_hat'].size()
+    num_pixels = size[0] * size[2] * size[3]
+    bpp = sum(torch.log2(likelihoods).sum() / (-num_pixels)
+              for likelihoods in out_net["likelihoods"].values())
+    return bpp.item()
 
 def train_one_epoch(
     model, criterion, train_dataloader, optimizer, aux_optimizer, epoch, clip_max_norm, type='mse'
 ):
     model.train()
     device = next(model.parameters()).device
+    
+    total_loss = 0
+    num_batches = len(train_dataloader)
 
     for i, d in enumerate(train_dataloader):
         d = d.to(device)
@@ -135,7 +184,41 @@ def train_one_epoch(
         aux_loss.backward()
         aux_optimizer.step()
 
+        total_loss += out_criterion["loss"].item()
+
+
         if i % 100 == 0:
+            # Create comparison image
+            original = d[0].cpu()
+            reconstructed = out_net["x_hat"][0].cpu().detach()
+            comparison = torch.cat([original, reconstructed], dim=2)
+            
+            # Estimate bits per pixel (bpp)
+            bpp = estimate_bpp(out_net)
+            
+            # Estimate file size in bytes
+            num_pixels = d.size(0) * d.size(2) * d.size(3)
+            estimated_size = (bpp * num_pixels) / 8  # Convert bits to bytes
+
+            # Create a figure with two subplots
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+            
+            # Plot the comparison image
+            ax1.imshow(comparison.permute(1, 2, 0).numpy())
+            ax1.set_title("Original (left) vs Reconstructed (right)")
+            ax1.axis('off')
+            
+            # Add text with compression information
+            ax2.text(0.5, 0.5, f"Estimated compressed size: {estimated_size:.2f} bytes", 
+                    ha='center', va='center', fontsize=12)
+            ax2.axis('off')
+
+            # Save the figure to the current directory
+            if not os.path.exists('comparison_images'):
+                os.makedirs('comparison_images')
+            plt.savefig(f'comparison_images/comparison_epoch_{epoch}_batch_{i}.png')
+            plt.close(fig)
+
             if type == 'mse':
                 print(
                     f"Train epoch {epoch}: ["
@@ -144,7 +227,8 @@ def train_one_epoch(
                     f'\tLoss: {out_criterion["loss"].item():.3f} |'
                     f'\tMSE loss: {out_criterion["mse_loss"].item():.3f} |'
                     f'\tBpp loss: {out_criterion["bpp_loss"].item():.2f} |'
-                    f"\tAux loss: {aux_loss.item():.2f}"
+                    f"\tAux loss: {aux_loss.item():.2f} |"
+                    f"\tCompressed size: {estimated_size:.2f} bytes"
                 )
             else:
                 print(
@@ -154,64 +238,13 @@ def train_one_epoch(
                     f'\tLoss: {out_criterion["loss"].item():.3f} |'
                     f'\tMS_SSIM loss: {out_criterion["ms_ssim_loss"].item():.3f} |'
                     f'\tBpp loss: {out_criterion["bpp_loss"].item():.2f} |'
-                    f"\tAux loss: {aux_loss.item():.2f}"
+                    f"\tAux loss: {aux_loss.item():.2f} |"
+                    f"\tCompressed size: {estimated_size:.2f} bytes"
                 )
 
-
-def test_epoch(epoch, test_dataloader, model, criterion, type='mse'):
-    model.eval()
-    device = next(model.parameters()).device
-    if type == 'mse':
-        loss = AverageMeter()
-        bpp_loss = AverageMeter()
-        mse_loss = AverageMeter()
-        aux_loss = AverageMeter()
-
-        with torch.no_grad():
-            for d in test_dataloader:
-                d = d.to(device)
-                out_net = model(d)
-                out_criterion = criterion(out_net, d)
-
-                aux_loss.update(model.aux_loss())
-                bpp_loss.update(out_criterion["bpp_loss"])
-                loss.update(out_criterion["loss"])
-                mse_loss.update(out_criterion["mse_loss"])
-
-        print(
-            f"Test epoch {epoch}: Average losses:"
-            f"\tLoss: {loss.avg:.3f} |"
-            f"\tMSE loss: {mse_loss.avg:.3f} |"
-            f"\tBpp loss: {bpp_loss.avg:.2f} |"
-            f"\tAux loss: {aux_loss.avg:.2f}\n"
-        )
-
-    else:
-        loss = AverageMeter()
-        bpp_loss = AverageMeter()
-        ms_ssim_loss = AverageMeter()
-        aux_loss = AverageMeter()
-
-        with torch.no_grad():
-            for d in test_dataloader:
-                d = d.to(device)
-                out_net = model(d)
-                out_criterion = criterion(out_net, d)
-
-                aux_loss.update(model.aux_loss())
-                bpp_loss.update(out_criterion["bpp_loss"])
-                loss.update(out_criterion["loss"])
-                ms_ssim_loss.update(out_criterion["ms_ssim_loss"])
-
-        print(
-            f"Test epoch {epoch}: Average losses:"
-            f"\tLoss: {loss.avg:.3f} |"
-            f"\tMS_SSIM loss: {ms_ssim_loss.avg:.3f} |"
-            f"\tBpp loss: {bpp_loss.avg:.2f} |"
-            f"\tAux loss: {aux_loss.avg:.2f}\n"
-        )
-
-    return loss.avg
+    avg_loss = total_loss / num_batches
+    print(f"Train epoch {epoch}: Average loss: {avg_loss:.3f}")
+    return avg_loss
 
 
 def save_checkpoint(state, is_best, epoch, save_path, filename):
@@ -333,33 +366,13 @@ def main(argv):
         [transforms.RandomCrop(args.patch_size), transforms.ToTensor()]
     )
 
-    test_transforms = transforms.Compose(
-        [transforms.CenterCrop(args.patch_size), transforms.ToTensor()]
-    )
 
-
-    train_dataset = ImageFolder(args.dataset, split="", transform=train_transforms)
-    test_dataset = ImageFolder(args.dataset, split="", transform=test_transforms)
 
     device = "cuda" if args.cuda and torch.cuda.is_available() else "cpu"
     print(device)
     device = 'cuda'
 
-    train_dataloader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        shuffle=True,
-        pin_memory=(device == "cuda"),
-    )
 
-    test_dataloader = DataLoader(
-        test_dataset,
-        batch_size=args.test_batch_size,
-        num_workers=args.num_workers,
-        shuffle=False,
-        pin_memory=(device == "cuda"),
-    )
 
     net = TCM(config=[2,2,2,2,2,2], head_dim=[8, 16, 32, 32, 16, 8], drop_path_rate=0.0, N=args.N, M=320)
     net = net.to(device)
@@ -387,39 +400,50 @@ def main(argv):
 
     best_loss = float("inf")
     for epoch in range(last_epoch, args.epochs):
-        print(f"Learning rate: {optimizer.param_groups[0]['lr']}")
-        train_one_epoch(
-            net,
-            criterion,
-            train_dataloader,
-            optimizer,
-            aux_optimizer,
-            epoch,
-            args.clip_max_norm,
-            type
-        )
-        loss = test_epoch(epoch, test_dataloader, net, criterion, type)
-        writer.add_scalar('test_loss', loss, epoch)
-        lr_scheduler.step()
-
-        is_best = loss < best_loss
-        best_loss = min(loss, best_loss)
-
-        if args.save:
-            save_checkpoint(
-                {
-                    "epoch": epoch,
-                    "state_dict": net.state_dict(),
-                    "loss": loss,
-                    "optimizer": optimizer.state_dict(),
-                    "aux_optimizer": aux_optimizer.state_dict(),
-                    "lr_scheduler": lr_scheduler.state_dict(),
-                },
-                is_best,
-                epoch,
-                save_path,
-                save_path + str(epoch) + "_checkpoint.pth.tar",
+        num_shards = 10  # Split the dataset into 10 shards
+        for shard_index in range(num_shards):
+            train_dataset = ImageFolder(args.dataset, transform=train_transforms, num_shards=num_shards, shard_index=shard_index)
+    
+            train_dataloader = DataLoader(
+                train_dataset,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                shuffle=True,
+                pin_memory=(device == "cuda"),
             )
+        
+            print(f"Learning rate: {optimizer.param_groups[0]['lr']}")
+            train_loss = train_one_epoch(
+                net,
+                criterion,
+                train_dataloader,
+                optimizer,
+                aux_optimizer,
+                epoch,
+                args.clip_max_norm,
+                type
+            )
+            writer.add_scalar('train_loss', train_loss, epoch)
+            lr_scheduler.step()
+
+            is_best = train_loss < best_loss
+            best_loss = min(train_loss, best_loss)
+
+            if args.save:
+                save_checkpoint(
+                    {
+                        "epoch": epoch,
+                        "state_dict": net.state_dict(),
+                        "loss": train_loss,
+                        "optimizer": optimizer.state_dict(),
+                        "aux_optimizer": aux_optimizer.state_dict(),
+                        "lr_scheduler": lr_scheduler.state_dict(),
+                    },
+                    is_best,
+                    epoch,
+                    save_path,
+                    save_path + str(epoch) + "_" + str(shard_index) + "_checkpoint.pth.tar",
+                )
 
 
 if __name__ == "__main__":
