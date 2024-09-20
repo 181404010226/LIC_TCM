@@ -11,7 +11,7 @@ python compress_images.py --checkpoint save/0.05checkpoint_best.pth.tar --cuda -
 python compressToTar.py --input_dir compressed --output_zip output.tar
 
 # 解压图片
-python decompress_images.py --prefix austin1 --bin_path compressed --checkpoint save/0.05checkpoint_best.pth.tar --output output_image.png --cuda --N 64
+python decompress_images.py --prefix austin10 --bin_path compressedBIN --checkpoint save/0.05checkpoint_best.pth.tar --output output_image.png --cuda --N 64
 
 #windows
 $env:CUDA_VISIBLE_DEVICES=0

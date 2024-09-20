@@ -1,12 +1,13 @@
 import sys
 import os
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QLabel, QScrollArea
-from PyQt5.QtGui import QPixmap, QPainter, QColor
+from PyQt5.QtGui import QPixmap, QPainter, QColor, QImage
 from PyQt5.QtCore import Qt, QRect
 import torch
 from PIL import Image
-from PIL.ImageQt import ImageQt
+import numpy as np
 from decompress_images import load_model, decompress_bin_file, assemble_grid
+
 
 class SatelliteImageViewer(QWidget):
     def __init__(self):
@@ -15,8 +16,9 @@ class SatelliteImageViewer(QWidget):
         self.net = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.grid_size = 19
-        self.bin_path = "bin_files"  # 指定存放bin文件的文件夹
-        self.checkpoint = "model_checkpoint.pth"  # 指定模型checkpoint文件
+        self.bin_path = "compressedBIN"  # 指定存放bin文件的文件夹
+        self.checkpoint = "save/0.05checkpoint_best.pth.tar"  # 指定模型checkpoint文件
+        self.N = 64
 
     def initUI(self):
         layout = QVBoxLayout()
@@ -50,7 +52,7 @@ class SatelliteImageViewer(QWidget):
             return
 
         if self.net is None:
-            self.net = load_model(self.checkpoint, self.device)
+            self.net = load_model(self.checkpoint, self.device, self.N)
 
         # 收集bin文件
         bin_files = []
@@ -81,12 +83,16 @@ class SatelliteImageViewer(QWidget):
             x_hat = decompress_bin_file(self.net, bin_path, json_path, self.device)
             images.append({'position': (j, i), 'image': x_hat.squeeze(0)})
 
+
         # 组装网格
         grid_image = assemble_grid(images, self.grid_size)
 
         # 转换为QPixmap并显示
-        qim = ImageQt(grid_image)
-        pixmap = QPixmap.fromImage(qim)
+        grid_image_np = np.array(grid_image)
+        height, width, channel = grid_image_np.shape
+        bytes_per_line = 3 * width
+        qimage = QImage(grid_image_np.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(qimage)
         self.image_label.setPixmap(pixmap)
         self.image_label.resize(pixmap.size())
 

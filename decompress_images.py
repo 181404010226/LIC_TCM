@@ -42,8 +42,8 @@ def crop(x, padding):
         (-padding[0], -padding[1], -padding[2], -padding[3]),
     )
 
-def load_model(checkpoint_path, device):
-    net = TCM(config=[2,2,2,2,2,2], head_dim=[8, 16, 32, 32, 16, 8], drop_path_rate=0.0, N=args.N, M=320)
+def load_model(checkpoint_path, device, N):
+    net = TCM(config=[2,2,2,2,2,2], head_dim=[8, 16, 32, 32, 16, 8], drop_path_rate=0.0, N=N, M=320)
     net = net.to(device)
     net.eval()
 
@@ -111,7 +111,7 @@ def main():
     
     # Load model
     print("Loading model...")
-    net = load_model(args.checkpoint, device)
+    net = load_model(args.checkpoint, device, args.N)
     
     # Collect bin files
     bin_files = []
