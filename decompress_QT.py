@@ -10,7 +10,8 @@ from PIL import Image
 import numpy as np
 from collections import deque
 from decompress_images import load_model, decompress_bin_file, assemble_grid
-
+import heapq
+from math import sqrt
 
 class ImageLoaderThread(QThread):
     progress = pyqtSignal(QPixmap)
@@ -22,19 +23,31 @@ class ImageLoaderThread(QThread):
         self.bin_path = bin_path
         self.grid_size = grid_size
         self.device = device
-        self._is_running = True  # 添加运行标志
-        self.center_position = (0, 0)  # 添加中心位置属性
+        self._is_running = True
+        self.center_position = (0, 0)
+        self.image_queue = []
+        self.loaded_images = set()  # 存储已加载图片的集合
+        self.images = []  # 存储已加载的图片数据
 
     def set_center_position(self, position):
         self.center_position = position
+        self._update_queue()
+
+    def _update_queue(self):
+        # 清空当前队列
+        self.image_queue = []
+        # 重新计算所有未加载图片与中心的距离并加入队列
+        for i, j, bin_path in self.bin_files:
+            if bin_path not in self.loaded_images:
+                distance = sqrt((i*256 - self.center_position[0])**2 + (j*256 - self.center_position[1])**2)
+                heapq.heappush(self.image_queue, (distance, (i, j, bin_path)))
 
     def run(self):
-        images = []
-        for i, j, bin_path in self.bin_files:
-            # print(f"当前中心位置: {self.center_position}")
-            if not self._is_running:
-                print("ImageLoaderThread 已被停止。")
-                break  # 检查是否停止线程
+        while self.image_queue and self._is_running:
+            _, (i, j, bin_path) = heapq.heappop(self.image_queue)
+
+            if bin_path in self.loaded_images:
+                continue  # 跳过已加载的图片
 
             json_filename = f"{os.path.splitext(os.path.basename(bin_path))[0]}.json"
             json_path = os.path.join(self.bin_path, json_filename)
@@ -46,10 +59,12 @@ class ImageLoaderThread(QThread):
             except Exception as e:
                 print(f"Error decompressing {bin_path}: {e}")
                 continue
-            images.append({'position': (j, i), 'image': x_hat.squeeze(0)})
+            
+            self.images.append({'position': (j, i), 'image': x_hat.squeeze(0)})
+            self.loaded_images.add(bin_path)  # 标记图片为已加载
 
             # 组装当前已加载的图像网格
-            grid_image = assemble_grid(images, self.grid_size)
+            grid_image = assemble_grid(self.images, self.grid_size)
 
             # 转换为 QPixmap 并发送信号
             grid_image_np = np.array(grid_image)
@@ -60,11 +75,11 @@ class ImageLoaderThread(QThread):
             self.progress.emit(pixmap)
 
         # 加载完成后发送最终的图像
-        if images and self._is_running:
+        if self.images and self._is_running:
             self.progress.emit(pixmap)
 
     def stop(self):
-        self._is_running = False  # 设置运行标志为 False
+        self._is_running = False
 
 
 class SatelliteImageViewer(QWidget):
