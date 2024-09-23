@@ -112,6 +112,11 @@ class SatelliteImageViewer(QWidget):
         if self.thread and self.thread.isRunning():
             self.thread.stop()
             self.thread.wait()
+            try:
+                self.thread.progress_image.disconnect(self.update_image)
+            except TypeError:
+                # The signal was already disconnected
+                pass
 
         prefix = self.prefix_combo.currentText()
         if not prefix:
