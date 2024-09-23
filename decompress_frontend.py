@@ -98,30 +98,57 @@ class SatelliteImageViewer(QWidget):
         usage_tip.setStyleSheet("color: black; font-family: SimSun, serif; font-size: 14px;")
         layout.addWidget(usage_tip)
 
-        # 添加缩略图视图
+        # 创建一个包含主画布和缩略图的容器widget
+        container = QWidget()
+        container_layout = QHBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+
+        # 添加主画布到容器
+        container_layout.addWidget(self.graphics_view)
+
+        # 创建缩略图视图
         self.thumbnail_view = QGraphicsView()
         self.thumbnail_view.setFixedSize(200, 200)
         self.thumbnail_scene = QGraphicsScene()
-        
-        # **Set the sceneRect to match the thumbnail size**
         self.thumbnail_scene.setSceneRect(0, 0, 200, 200)
-        
         self.thumbnail_view.setScene(self.thumbnail_scene)
         self.thumbnail_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.thumbnail_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        # 添加布局
-        graphics_layout = QHBoxLayout()
-        graphics_layout.addWidget(self.graphics_view)
+        # 设置缩略图的样式，使其看起来像悬浮
+        self.thumbnail_view.setStyleSheet("""
+            background: transparent;
+            border: 2px solid lightgray;
+            border-radius: 5px;
+        """)
 
-        # 在右下角添加缩略图
-        thumbnail_layout = QVBoxLayout()
-        thumbnail_layout.addStretch()
+        # 创建一个新的布局来放置缩略图
+        thumbnail_layout = QHBoxLayout()
+        thumbnail_layout.addStretch(1)
         thumbnail_layout.addWidget(self.thumbnail_view)
-        graphics_layout.addLayout(thumbnail_layout)
+        thumbnail_layout.setContentsMargins(0, 0, 10, 10)  # 右下角留出一些边距
 
-        layout.addLayout(graphics_layout)
+        # 将缩略图布局叠加到容器上
+        container_layout.addLayout(thumbnail_layout)
+
+        # 将容器添加到主布局
+        layout.addWidget(container)
+
         self.setLayout(layout)
+
+        # 设置缩略图在主画布上的位置
+        self.thumbnail_view.setParent(self.graphics_view)
+        self.thumbnail_view.move(self.graphics_view.width() - 210, self.graphics_view.height() - 210)
+        self.thumbnail_view.raise_()  # 确保缩略图在最上层
+
+        # 连接窗口大小变化信号到更新缩略图位置的槽函数
+        self.graphics_view.resizeEvent = self.update_thumbnail_position
+
+    def update_thumbnail_position(self, event):
+        # 更新缩略图位置
+        self.thumbnail_view.move(self.graphics_view.width() - 210, self.graphics_view.height() - 210)
+        # 调用原始的 resizeEvent
+        super(QGraphicsView, self.graphics_view).resizeEvent(event)
 
     def update_thumbnail(self):
         # 清除之前的缩略图
