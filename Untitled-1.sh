@@ -6,6 +6,9 @@ nohup bash -c 'CUDA_VISIBLE_DEVICES=0 python -u ./train.py -d /root/autodl-tmp/A
 # 压缩图片
 python compress_images.py --checkpoint save/0.05checkpoint_best.pth.tar --cuda --input_dir output --output_dir compressedBIN --N 64
 
+# 压缩解压图片
+python compress_and_decompress.py --checkpoint 3dtilesave/0.05checkpoint_latest.pth.tar --cuda --input_dir cropped_images --output_dir 3dtilesCompressedBIN --N 64
+
 
 # 压缩图片并打包
 python compressToTar.py --input_dir compressed --output_zip output.tar
