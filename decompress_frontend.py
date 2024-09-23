@@ -89,29 +89,23 @@ class SatelliteImageViewer(QWidget):
     def update_scale_label(self):
         self.scale_label.setText(f"{self.scale_factor:.2f}x")
 
-    def init_thumbnail(self,layout,input_layout):
+    def init_thumbnail(self, layout, input_layout):
         layout.addLayout(input_layout)
+        
         # 使用提示标签
         usage_tip = QLabel("使用说明：鼠标左键拖动移动图像，鼠标右键左右拖动进行缩放")
         usage_tip.setAlignment(Qt.AlignCenter)
         usage_tip.setStyleSheet("color: black; font-family: SimSun, serif; font-size: 14px;")
         layout.addWidget(usage_tip)
 
-        # 创建主视图和场景
-        self.graphics_view = QGraphicsView()
-        self.graphics_view.setAlignment(Qt.AlignCenter)
-        self.graphics_view.setDragMode(QGraphicsView.NoDrag)
-        self.graphics_view.viewport().installEventFilter(self)
-
-        self.scene = QGraphicsScene()
-        self.scene.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
-        self.refresh_black_canvas()
-        self.graphics_view.setScene(self.scene)
-
         # 添加缩略图视图
         self.thumbnail_view = QGraphicsView()
         self.thumbnail_view.setFixedSize(200, 200)
         self.thumbnail_scene = QGraphicsScene()
+        
+        # **Set the sceneRect to match the thumbnail size**
+        self.thumbnail_scene.setSceneRect(0, 0, 200, 200)
+        
         self.thumbnail_view.setScene(self.thumbnail_scene)
         self.thumbnail_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.thumbnail_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -152,28 +146,30 @@ class SatelliteImageViewer(QWidget):
         self.update_thumbnail_viewport()
 
     def update_thumbnail_viewport(self):
-        # 移除先前的视口矩形
+        # Remove previous viewport rectangle
         for item in self.thumbnail_scene.items():
             if isinstance(item, QGraphicsRectItem) and item.data(0) == 'viewport_rect':
                 self.thumbnail_scene.removeItem(item)
         
-        # 计算主视图当前视口在缩略图中的位置
-        view_rect = self.graphics_view.viewport().rect()
-        top_left = self.graphics_view.mapToScene(view_rect.topLeft())
-        bottom_right = self.graphics_view.mapToScene(view_rect.bottomRight())
-
-        # 缩放比例
+        # Get the main scene and thumbnail dimensions
         scene_rect = self.scene.sceneRect()
         thumbnail_rect = self.thumbnail_scene.sceneRect()
+        
+        # Calculate scaling ratios
         x_ratio = thumbnail_rect.width() / scene_rect.width()
         y_ratio = thumbnail_rect.height() / scene_rect.height()
-
-        x = top_left.x() * x_ratio
-        y = top_left.y() * y_ratio
-        width = (bottom_right.x() - top_left.x()) * x_ratio
-        height = (bottom_right.y() - top_left.y()) * y_ratio
-
-        # 绘制白色空心矩形
+        
+        # Calculate visible area dimensions
+        visible_width = self.graphics_view.viewport().width() / self.scale_factor
+        visible_height = self.graphics_view.viewport().height() / self.scale_factor
+        
+        # Calculate rectangle position and size in thumbnail coordinates
+        x = (self.center_position[0] - visible_width / 2) * x_ratio
+        y = (self.center_position[1] - visible_height / 2) * y_ratio
+        width = visible_width * x_ratio
+        height = visible_height * y_ratio
+        print("缩略图白色空心框位置：",x,y,width,height)
+        # Create and add the viewport rectangle to the thumbnail scene
         rect_item = QGraphicsRectItem(x, y, width, height)
         rect_item.setPen(QPen(QColor(255, 255, 255)))
         rect_item.setData(0, 'viewport_rect')
