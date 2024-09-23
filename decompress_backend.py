@@ -13,6 +13,7 @@ import threading  # 引入 threading 模块
 class ImageLoaderThread(QThread):
     # 发送单个图像及其位置的信号
     progress_image = pyqtSignal(QPixmap, tuple)  # pixmap, position
+    finished = pyqtSignal() 
 
     def __init__(self, net, bin_files, bin_path, grid_size, device, batch_size=8, max_workers=4):
         super().__init__()
@@ -123,6 +124,10 @@ class ImageLoaderThread(QThread):
             position = image_data['position']
             pixmap = self._convert_to_pixmap(grid_image)
             self.progress_image.emit(pixmap, position)
+
+        # Emit the finished signal when done
+        if self._is_running:
+            self.finished.emit()
 
     def _convert_to_pixmap(self, grid_image):
         """

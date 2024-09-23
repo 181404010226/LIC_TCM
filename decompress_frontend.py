@@ -2,9 +2,9 @@ import sys
 import os
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QComboBox, QSizePolicy,
-    QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
+    QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QPushButton,QFileDialog,QGraphicsRectItem
 )
-from PyQt5.QtGui import QPixmap, QImage, QBrush, QColor # Import QBrush and QColor
+from PyQt5.QtGui import QPixmap, QImage, QBrush, QColor,QPainter,QPen # Import QBrush and QColor
 from PyQt5.QtCore import Qt, QPoint, QRectF, QEvent  # 添加 QEvent 导入
 import torch
 from decompress_backend import ImageLoaderThread  # Importing from backend
@@ -26,25 +26,33 @@ class SatelliteImageViewer(QWidget):
         self.thread = None  # Reference to the current thread
         self.center_position = (19*128, 19*128)
         self.initUI()
+        self.graphics_view.horizontalScrollBar().valueChanged.connect(self.update_thumbnail_viewport)
+        self.graphics_view.verticalScrollBar().valueChanged.connect(self.update_thumbnail_viewport)
+        self.graphics_view.viewport().installEventFilter(self)
+        self.update_scale_label()
 
     def initUI(self):
         layout = QVBoxLayout()
 
         # Create prefix dropdown and label
         input_layout = QHBoxLayout()
+        self.load_label = QLabel("请选择卫星图")
         self.prefix_combo = QComboBox()
-        self.load_label = QLabel("请选择前缀")
         self.load_prefixes()
         self.prefix_combo.currentIndexChanged.connect(self.load_image)
         input_layout.addWidget(self.load_label)
         input_layout.addWidget(self.prefix_combo)
-        layout.addLayout(input_layout)
 
-        # 添加使用提示标签
-        usage_tip = QLabel("使用说明：鼠标左键拖动移动图像，鼠标右键左右拖动进行缩放")
-        usage_tip.setAlignment(Qt.AlignCenter)
-        usage_tip.setStyleSheet("color: black; font-family: SimSun, serif; font-size: 14px;")
-        layout.addWidget(usage_tip)
+        # 新增的按钮
+        self.open_folder_button = QPushButton("打开源文件夹")
+        self.open_folder_button.clicked.connect(self.open_source_folder)
+
+        self.download_image_button = QPushButton("下载完整图片")
+        self.download_image_button.setEnabled(False)  # 初始状态为不可点击
+        self.download_image_button.clicked.connect(self.download_full_image)
+
+        input_layout.addWidget(self.open_folder_button)
+        input_layout.addWidget(self.download_image_button)
 
         # Create QGraphicsView and QGraphicsScene to display images
         self.graphics_view = QGraphicsView()
@@ -59,12 +67,143 @@ class SatelliteImageViewer(QWidget):
         self.refresh_black_canvas()
 
         self.graphics_view.setScene(self.scene)
-        layout.addWidget(self.graphics_view)
+    
         self.setLayout(layout)
         self.setGeometry(100, 100, 1024, 768)
         self.setWindowTitle('Satellite Image Viewer')
         self.show()
 
+        self.init_thumbnail(layout,input_layout)
+
+        # 创建比例尺标签
+        self.scale_label = QLabel()
+        self.scale_label.setFixedWidth(50)
+        self.scale_label.setAlignment(Qt.AlignCenter)
+
+        # 创建布局
+        graphics_layout = QHBoxLayout()
+        graphics_layout.addWidget(self.scale_label)
+        graphics_layout.addWidget(self.graphics_view)
+        layout.addLayout(graphics_layout)
+
+    def update_scale_label(self):
+        self.scale_label.setText(f"{self.scale_factor:.2f}x")
+
+    def init_thumbnail(self,layout,input_layout):
+        layout.addLayout(input_layout)
+        # 使用提示标签
+        usage_tip = QLabel("使用说明：鼠标左键拖动移动图像，鼠标右键左右拖动进行缩放")
+        usage_tip.setAlignment(Qt.AlignCenter)
+        usage_tip.setStyleSheet("color: black; font-family: SimSun, serif; font-size: 14px;")
+        layout.addWidget(usage_tip)
+
+        # 创建主视图和场景
+        self.graphics_view = QGraphicsView()
+        self.graphics_view.setAlignment(Qt.AlignCenter)
+        self.graphics_view.setDragMode(QGraphicsView.NoDrag)
+        self.graphics_view.viewport().installEventFilter(self)
+
+        self.scene = QGraphicsScene()
+        self.scene.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
+        self.refresh_black_canvas()
+        self.graphics_view.setScene(self.scene)
+
+        # 添加缩略图视图
+        self.thumbnail_view = QGraphicsView()
+        self.thumbnail_view.setFixedSize(200, 200)
+        self.thumbnail_scene = QGraphicsScene()
+        self.thumbnail_view.setScene(self.thumbnail_scene)
+        self.thumbnail_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.thumbnail_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        # 添加布局
+        graphics_layout = QHBoxLayout()
+        graphics_layout.addWidget(self.graphics_view)
+
+        # 在右下角添加缩略图
+        thumbnail_layout = QVBoxLayout()
+        thumbnail_layout.addStretch()
+        thumbnail_layout.addWidget(self.thumbnail_view)
+        graphics_layout.addLayout(thumbnail_layout)
+
+        layout.addLayout(graphics_layout)
+        self.setLayout(layout)
+
+    def update_thumbnail(self):
+        # 清除之前的缩略图
+        self.thumbnail_scene.clear()
+
+        # 获取主场景的图像
+        scene_rect = self.scene.sceneRect()
+        image = QImage(scene_rect.size().toSize(), QImage.Format_ARGB32)
+        painter = QPainter(image)
+        self.scene.render(painter)
+        painter.end()
+
+        # 缩放图像以适应缩略图视图
+        thumbnail_size = self.thumbnail_view.viewport().size()
+        scaled_image = image.scaled(thumbnail_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        pixmap = QPixmap.fromImage(scaled_image)
+
+        # 在缩略图场景中显示图像
+        self.thumbnail_scene.addPixmap(pixmap)
+
+        # 更新视口矩形
+        self.update_thumbnail_viewport()
+
+    def update_thumbnail_viewport(self):
+        # 移除先前的视口矩形
+        for item in self.thumbnail_scene.items():
+            if isinstance(item, QGraphicsRectItem) and item.data(0) == 'viewport_rect':
+                self.thumbnail_scene.removeItem(item)
+        
+        # 计算主视图当前视口在缩略图中的位置
+        view_rect = self.graphics_view.viewport().rect()
+        top_left = self.graphics_view.mapToScene(view_rect.topLeft())
+        bottom_right = self.graphics_view.mapToScene(view_rect.bottomRight())
+
+        # 缩放比例
+        scene_rect = self.scene.sceneRect()
+        thumbnail_rect = self.thumbnail_scene.sceneRect()
+        x_ratio = thumbnail_rect.width() / scene_rect.width()
+        y_ratio = thumbnail_rect.height() / scene_rect.height()
+
+        x = top_left.x() * x_ratio
+        y = top_left.y() * y_ratio
+        width = (bottom_right.x() - top_left.x()) * x_ratio
+        height = (bottom_right.y() - top_left.y()) * y_ratio
+
+        # 绘制白色空心矩形
+        rect_item = QGraphicsRectItem(x, y, width, height)
+        rect_item.setPen(QPen(QColor(255, 255, 255)))
+        rect_item.setData(0, 'viewport_rect')
+        self.thumbnail_scene.addItem(rect_item)
+
+    def open_source_folder(self):
+        # 打开存储 bin 文件的文件夹
+        path = os.path.abspath(self.bin_path)
+        if sys.platform == 'win32':
+            os.startfile(path)
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', path])
+        else:
+            subprocess.Popen(['xdg-open', path])
+
+    def download_full_image(self):
+        if self.image_loaded:
+            # 将场景渲染为图像
+            scene_rect = self.scene.sceneRect()
+            image = QImage(scene_rect.size().toSize(), QImage.Format_ARGB32)
+            image.fill(Qt.transparent)
+            painter = QPainter(image)
+            self.scene.render(painter)
+            painter.end()
+
+            # 保存图像
+            options = QFileDialog.Options()
+            save_path, _ = QFileDialog.getSaveFileName(self, "保存完整图片", "", "PNG Files (*.png);;All Files (*)", options=options)
+            if save_path:
+                image.save(save_path)
     # 添加这个新方法
     def eventFilter(self, source, event):
         if source == self.graphics_view.viewport():
@@ -148,11 +287,19 @@ class SatelliteImageViewer(QWidget):
         self.scene.clear()
         self.refresh_black_canvas()
 
+        self.download_image_button.setEnabled(False)
+        self.image_loaded = False
         # Start the image loading thread
         self.thread = ImageLoaderThread(self.net, bin_files, self.bin_path, self.grid_size, self.device)
         self.thread.progress_image.connect(self.update_image)
+        self.thread.finished.connect(self.on_image_load_complete)  # Connect the finished signal here
         self.thread.set_center_position(self.center_position)
         self.thread.start()
+
+    def on_image_load_complete(self):
+        self.download_image_button.setEnabled(True)
+        self.image_loaded = True
+        self.update_thumbnail()
 
     def update_image(self, pixmap, position):
         """
@@ -180,7 +327,7 @@ class SatelliteImageViewer(QWidget):
             self.thread.set_center_position(self.center_position)
 
     def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.LeftButton and self.thread and self.thread.isRunning():
+        if event.buttons() & Qt.LeftButton:
             delta = event.globalPos() - self.last_mouse_position
             self.last_mouse_position = event.globalPos()
             
@@ -196,12 +343,12 @@ class SatelliteImageViewer(QWidget):
             self.update_center_position()
 
     def rightMouseMoveEvent(self, event):
-        if self.thread and self.thread.isRunning():
+        if event.buttons() & Qt.RightButton:
             delta = event.globalPos() - self.last_mouse_position
             self.last_mouse_position = event.globalPos()
             
             # 根据水平移动距离计算缩放因子
-            scale_change = 1 + (delta.x() / 100)  # 可以调整这个值来改变缩放速度
+            scale_change = 1 + (delta.x() / 100)
             self.scale_factor *= scale_change
             self.scale_factor = max(0.1, min(self.scale_factor, 5))
             
@@ -209,8 +356,9 @@ class SatelliteImageViewer(QWidget):
             self.graphics_view.resetTransform()
             self.graphics_view.scale(self.scale_factor, self.scale_factor)
             
-            # 更新中心位置
+            # 更新中心位置和比例尺标签
             self.update_center_position()
+            self.update_scale_label()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
