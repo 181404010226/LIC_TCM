@@ -1,13 +1,13 @@
 import sys
 import os
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QComboBox, QSizePolicy,
+    QProgressDialog,QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QComboBox, QSizePolicy,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QPushButton,QFileDialog,QGraphicsRectItem
 )
 from PyQt5.QtGui import QPixmap, QImage, QBrush, QColor,QPainter,QPen # Import QBrush and QColor
-from PyQt5.QtCore import Qt, QPoint, QRectF, QEvent  # 添加 QEvent 导入
+from PyQt5.QtCore import  Qt, QPoint, QRectF, QEvent,QTimer, QPropertyAnimation, QEasingCurve, QThread # 添加 QEvent 导入
 import torch
-from decompress_backend import ImageLoaderThread  # Importing from backend
+from decompress_backend import ImageLoaderThread, ImageSaverWorker  # Importing from backend
 
 from decompress_images import load_model  # Assuming decompress_images is part of backend dependencies
 
@@ -38,6 +38,7 @@ class SatelliteImageViewer(QWidget):
         input_layout = QHBoxLayout()
         self.load_label = QLabel("请选择卫星图")
         self.prefix_combo = QComboBox()
+        self.prefix_combo.addItem("None")  # Add "None" as the default option
         self.load_prefixes()
         self.prefix_combo.currentIndexChanged.connect(self.load_image)
         input_layout.addWidget(self.load_label)
@@ -47,7 +48,7 @@ class SatelliteImageViewer(QWidget):
         self.open_folder_button = QPushButton("打开源文件夹")
         self.open_folder_button.clicked.connect(self.open_source_folder)
 
-        self.download_image_button = QPushButton("下载完整图片")
+        self.download_image_button = QPushButton("保存完整图片")
         self.download_image_button.setEnabled(False)  # 初始状态为不可点击
         self.download_image_button.clicked.connect(self.download_full_image)
 
@@ -87,7 +88,12 @@ class SatelliteImageViewer(QWidget):
         layout.addLayout(graphics_layout)
 
     def update_scale_label(self):
-        self.scale_label.setText(f"{self.scale_factor:.2f}x")
+        scale_text = f"{self.scale_factor:.2f}x"
+        vertical_text = '<br>'.join(scale_text)
+        self.scale_label.setText(vertical_text)
+        self.scale_label.setStyleSheet("font-size: 24px;")  # Double the font size
+        self.scale_label.setFixedWidth(40)  # Adjust width as needed
+        self.scale_label.setAlignment(Qt.AlignCenter)
 
     def init_thumbnail(self, layout, input_layout):
         layout.addLayout(input_layout)
@@ -114,6 +120,9 @@ class SatelliteImageViewer(QWidget):
         self.thumbnail_view.setScene(self.thumbnail_scene)
         self.thumbnail_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.thumbnail_view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        # 初始化缩略图为灰色
+        self.set_gray_thumbnail()
 
         # 设置缩略图的样式，使其看起来像悬浮
         self.thumbnail_view.setStyleSheet("""
@@ -143,6 +152,12 @@ class SatelliteImageViewer(QWidget):
 
         # 连接窗口大小变化信号到更新缩略图位置的槽函数
         self.graphics_view.resizeEvent = self.update_thumbnail_position
+
+    def set_gray_thumbnail(self):
+        gray_pixmap = QPixmap(200, 200)
+        gray_pixmap.fill(QColor(200, 200, 200))  # 设置为浅灰色
+        self.thumbnail_scene.clear()
+        self.thumbnail_scene.addPixmap(gray_pixmap)
 
     def update_thumbnail_position(self, event):
         # 更新缩略图位置
@@ -214,19 +229,92 @@ class SatelliteImageViewer(QWidget):
 
     def download_full_image(self):
         if self.image_loaded:
-            # 将场景渲染为图像
-            scene_rect = self.scene.sceneRect()
-            image = QImage(scene_rect.size().toSize(), QImage.Format_ARGB32)
-            image.fill(Qt.transparent)
-            painter = QPainter(image)
-            self.scene.render(painter)
-            painter.end()
+            # 让用户选择保存位置和文件名
+            save_path, _ = QFileDialog.getSaveFileName(self, "保存图片", "", "PNG Files (*.png);;All Files (*)")
+            if not save_path:
+                return  # 用户取消了保存操作
 
-            # 保存图像
-            options = QFileDialog.Options()
-            save_path, _ = QFileDialog.getSaveFileName(self, "保存完整图片", "", "PNG Files (*.png);;All Files (*)", options=options)
-            if save_path:
-                image.save(save_path)
+            # 创建并显示进度对话框
+            progress_dialog = QProgressDialog("正在保存图片...", "取消", 0, 0, self)
+            progress_dialog.setWindowTitle("保存进度")
+            progress_dialog.setWindowModality(Qt.WindowModal)
+            progress_dialog.setMinimumDuration(0)
+            progress_dialog.setCancelButton(None)  # 移除取消按钮
+            progress_dialog.setRange(0, 0)  # 设置为不确定的进度条
+
+            # 创建保存线程和工作器
+            self.save_thread = QThread()
+            self.saver = ImageSaverWorker(self.scene, save_path)
+            self.saver.moveToThread(self.save_thread)
+
+            # 连接信号和槽
+            self.save_thread.started.connect(self.saver.save_image)
+            self.saver.finished.connect(self.save_thread.quit)
+            self.saver.finished.connect(self.saver.deleteLater)
+            self.save_thread.finished.connect(self.save_thread.deleteLater)
+            self.save_thread.finished.connect(progress_dialog.close)
+            self.saver.success.connect(lambda: self.show_popup_message("图片保存成功"))
+            self.saver.error.connect(self.show_popup_message)
+
+            # 启动线程
+            self.save_thread.start()
+
+            # 显示进度对话框
+            progress_dialog.exec_()
+
+    def cancel_save(self):
+        if self.saver:
+            self.saver.cancel()
+        if self.save_thread:
+            self.save_thread.quit()
+            self.save_thread.wait()  
+
+    def show_popup_message(self, message):
+        popup = QLabel(message, self)
+        popup.setStyleSheet("""
+            background-color: rgba(0, 0, 0, 180);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+        """)
+        popup.setAlignment(Qt.AlignCenter)
+        popup.adjustSize()
+
+        # 将弹窗居中显示
+        popup.move(
+            self.width() // 2 - popup.width() // 2,
+            self.height() // 2 - popup.height() // 2
+        )
+
+        # 创建淡出动画
+        fade_out = QPropertyAnimation(popup, b"windowOpacity")
+        fade_out.setDuration(1000)  # 1秒
+        fade_out.setStartValue(1.0)
+        fade_out.setEndValue(0.0)
+        fade_out.setEasingCurve(QEasingCurve.OutQuad)
+
+        # 显示弹窗
+        popup.show()
+
+        # 使用 QTimer 来控制整个过程
+        def start_fade_out():
+            fade_out.start()
+
+        def remove_popup():
+            popup.deleteLater()
+            # 确保动画对象也被删除
+            fade_out.deleteLater()
+
+        # 1秒后开始淡出动画
+        QTimer.singleShot(1000, start_fade_out)
+
+        # 2秒后（显示1秒 + 淡出1秒）删除弹窗
+        QTimer.singleShot(2000, remove_popup)
+
+        # 保持对动画的引用，防止被过早回收
+        popup.fade_out_animation = fade_out
+
+
     # 添加这个新方法
     def eventFilter(self, source, event):
         if source == self.graphics_view.viewport():
@@ -270,6 +358,9 @@ class SatelliteImageViewer(QWidget):
         self.prefix_combo.addItems(sorted(prefixes))
 
     def load_image(self):
+        prefix = self.prefix_combo.currentText()
+        if prefix == "None":
+            return  # Do nothing if "None" is selected
         # Stop existing thread if running
         if self.thread and self.thread.isRunning():
             self.thread.stop()
@@ -279,6 +370,8 @@ class SatelliteImageViewer(QWidget):
             except TypeError:
                 # The signal was already disconnected
                 pass
+        # 设置缩略图为灰色
+        self.set_gray_thumbnail()
 
         prefix = self.prefix_combo.currentText()
         if not prefix:

@@ -1,6 +1,9 @@
 import sys
 import os
 from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtGui import QPixmap, QImage,QPainter # Import QBrush and QColor
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, Qt
+import torch
 import torch
 from decompress_images import load_model, decompress_bin_file, assemble_grid
 import heapq
@@ -9,6 +12,50 @@ import numpy as np
 from PyQt5.QtGui import QPixmap, QImage
 import concurrent.futures
 import threading  # 引入 threading 模块
+
+
+class ImageSaverWorker(QObject):
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+    success = pyqtSignal()
+
+    def __init__(self, scene, save_path):
+        super().__init__()
+        self.scene = scene
+        self.save_path = save_path
+        self.is_cancelled = False
+
+    @pyqtSlot()
+    def save_image(self):
+        try:
+            if self.is_cancelled:
+                return
+
+            # 将场景渲染为图像
+            scene_rect = self.scene.sceneRect()
+            image = QImage(scene_rect.size().toSize(), QImage.Format_ARGB32)
+            image.fill(Qt.transparent)
+            painter = QPainter(image)
+            self.scene.render(painter)
+            painter.end()
+
+            if self.is_cancelled:
+                return
+
+            # 保存图像
+            if image.save(self.save_path):
+                self.success.emit()
+            else:
+                self.error.emit("保存图片失败")
+        except Exception as e:
+            if not self.is_cancelled:
+                self.error.emit(str(e))
+        finally:
+            self.finished.emit()
+
+    @pyqtSlot()
+    def cancel(self):
+        self.is_cancelled = True
 
 class ImageLoaderThread(QThread):
     # 发送单个图像及其位置的信号
