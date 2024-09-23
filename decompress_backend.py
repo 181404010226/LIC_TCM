@@ -31,13 +31,15 @@ class ImageLoaderThread(QThread):
         self.lock = threading.Lock()  # 初始化锁
 
     def set_center_position(self, position):
+        # 输出当前位置
+        print(f"Setting center position to: {position}")
         self.center_position = position
         self._update_queue()
 
     def _update_queue(self):
-        # 清空当前队列
+        # Clear the current queue
         self.image_queue = []
-        # 重新计算距离并添加到队列
+        # Recalculate distances and update the priority queue based on the new center position
         for i, j, bin_path in self.bin_files:
             if bin_path not in self.loaded_images:
                 distance = sqrt(
@@ -45,6 +47,7 @@ class ImageLoaderThread(QThread):
                     (j * 256 - self.center_position[1])**2
                 )
                 heapq.heappush(self.image_queue, (distance, (i, j, bin_path)))
+    
 
     def run(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:

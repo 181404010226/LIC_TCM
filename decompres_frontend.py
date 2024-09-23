@@ -4,8 +4,8 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QComboBox, QSizePolicy,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
 )
-from PyQt5.QtGui import QPixmap, QImage
-from PyQt5.QtCore import Qt, QPoint
+from PyQt5.QtGui import QPixmap, QImage, QBrush, QColor # Import QBrush and QColor
+from PyQt5.QtCore import Qt, QPoint, QRectF, QEvent  # 添加 QEvent 导入
 import torch
 from decompress_backend import ImageLoaderThread  # Importing from backend
 
@@ -20,10 +20,11 @@ class SatelliteImageViewer(QWidget):
         self.bin_path = "compressedBIN"  # Directory containing bin files
         self.checkpoint = "save/0.05checkpoint_best.pth.tar"  # Model checkpoint file
         self.N = 64
-        self.scale_factor = 1.0  # Scale factor for zooming
         self.last_mouse_position = QPoint()
+        self.is_right_mouse_pressed = False
+        self.scale_factor = 1.0
         self.thread = None  # Reference to the current thread
-        self.center_position = (0, 0)
+        self.center_position = (19*128, 19*128)
         self.initUI()
 
     def initUI(self):
@@ -39,18 +40,62 @@ class SatelliteImageViewer(QWidget):
         input_layout.addWidget(self.prefix_combo)
         layout.addLayout(input_layout)
 
+        # 添加使用提示标签
+        usage_tip = QLabel("使用说明：鼠标左键拖动移动图像，鼠标右键左右拖动进行缩放")
+        usage_tip.setAlignment(Qt.AlignCenter)
+        usage_tip.setStyleSheet("color: black; font-family: SimSun, serif; font-size: 14px;")
+        layout.addWidget(usage_tip)
+
         # Create QGraphicsView and QGraphicsScene to display images
         self.graphics_view = QGraphicsView()
         self.graphics_view.setAlignment(Qt.AlignCenter)
-        self.graphics_view.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.graphics_view.setDragMode(QGraphicsView.NoDrag)
+        self.graphics_view.viewport().installEventFilter(self)
+
         self.scene = QGraphicsScene()
+
+        # Set the scene background to black
+        self.scene.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
+        self.refresh_black_canvas()
+
         self.graphics_view.setScene(self.scene)
         layout.addWidget(self.graphics_view)
-
         self.setLayout(layout)
         self.setGeometry(100, 100, 1024, 768)
         self.setWindowTitle('Satellite Image Viewer')
         self.show()
+
+    # 添加这个新方法
+    def eventFilter(self, source, event):
+        if source == self.graphics_view.viewport():
+            if event.type() == QEvent.MouseButtonPress:
+                if event.button() == Qt.LeftButton:
+                    self.last_mouse_position = event.globalPos()
+                    return True
+                elif event.button() == Qt.RightButton:
+                    self.is_right_mouse_pressed = True
+                    self.last_mouse_position = event.globalPos()
+                    return True
+            elif event.type() == QEvent.MouseButtonRelease:
+                if event.button() == Qt.RightButton:
+                    self.is_right_mouse_pressed = False
+                    return True
+            elif event.type() == QEvent.MouseMove:
+                if event.buttons() & Qt.LeftButton:
+                    self.mouseMoveEvent(event)
+                    return True
+                elif self.is_right_mouse_pressed:
+                    self.rightMouseMoveEvent(event)
+                    return True
+        return super().eventFilter(source, event)
+
+    def refresh_black_canvas(self):
+        canvas_size = 256 * self.grid_size  # Ensure the canvas covers the entire grid
+        self.scene.setSceneRect(0, 0, canvas_size, canvas_size)
+        black_rect = self.scene.addRect(
+            QRectF(0, 0, canvas_size, canvas_size),
+            brush=QBrush(QColor(0, 0, 0))
+        )
 
     def load_prefixes(self):
         prefixes = set()
@@ -96,6 +141,7 @@ class SatelliteImageViewer(QWidget):
 
         # Clear existing scene
         self.scene.clear()
+        self.refresh_black_canvas()
 
         # Start the image loading thread
         self.thread = ImageLoaderThread(self.net, bin_files, self.bin_path, self.grid_size, self.device)
@@ -117,40 +163,62 @@ class SatelliteImageViewer(QWidget):
         # 不再需要，因为每个图像独立添加
         pass
 
+
     def update_center_position(self):
-        # 可以根据需要实现，当前不需要
-        pass
+        # 计算视图中心点在场景中的位置
+        view_center = self.graphics_view.viewport().rect().center()
+        scene_center = self.graphics_view.mapToScene(view_center)
+        
+        # 更新中心位置
+        self.center_position = (int(scene_center.x()), int(scene_center.y()))
+        if self.thread:
+            self.thread.set_center_position(self.center_position)
 
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.LeftButton and self.thread and self.thread.isRunning():
             delta = event.globalPos() - self.last_mouse_position
             self.last_mouse_position = event.globalPos()
+            
+            # 更新滚动条位置
             self.graphics_view.horizontalScrollBar().setValue(
                 self.graphics_view.horizontalScrollBar().value() - delta.x()
             )
             self.graphics_view.verticalScrollBar().setValue(
                 self.graphics_view.verticalScrollBar().value() - delta.y()
             )
-            # self.update_center_position()  # 根据需要调整
+            
+            # 更新中心位置
+            self.update_center_position()
 
-    def wheelEvent(self, event):
-        if not self.thread or not self.thread.isRunning():
-            return
-        angle = event.angleDelta().y()
-        factor = 1.1 if angle > 0 else 0.9
-        self.scale_factor *= factor
-        self.scale_factor = max(0.1, min(self.scale_factor, 5))
-        self.graphics_view.resetTransform()
-        self.graphics_view.scale(self.scale_factor, self.scale_factor)
-        event.accept()
+    def rightMouseMoveEvent(self, event):
+        if self.thread and self.thread.isRunning():
+            delta = event.globalPos() - self.last_mouse_position
+            self.last_mouse_position = event.globalPos()
+            
+            # 根据水平移动距离计算缩放因子
+            scale_change = 1 + (delta.x() / 100)  # 可以调整这个值来改变缩放速度
+            self.scale_factor *= scale_change
+            self.scale_factor = max(0.1, min(self.scale_factor, 5))
+            
+            # 应用缩放
+            self.graphics_view.resetTransform()
+            self.graphics_view.scale(self.scale_factor, self.scale_factor)
+            
+            # 更新中心位置
+            self.update_center_position()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            self.last_mouse_position = event.globalPos()
+        elif event.button() == Qt.RightButton:
+            self.is_right_mouse_pressed = True
             self.last_mouse_position = event.globalPos()
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.last_mouse_position = QPoint()
+        elif event.button() == Qt.RightButton:
+            self.is_right_mouse_pressed = False
 
     def closeEvent(self, event):
         # Ensure the thread is properly stopped before closing
