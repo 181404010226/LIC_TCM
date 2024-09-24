@@ -30,6 +30,9 @@ class SatelliteImageViewer(QWidget):
         self.graphics_view.verticalScrollBar().valueChanged.connect(self.update_thumbnail_viewport)
         self.graphics_view.viewport().installEventFilter(self)
         self.update_scale_label()
+        self.thumbnail_update_timer = QTimer(self)
+        self.thumbnail_update_timer.timeout.connect(self.update_thumbnail_while_loading)
+      
 
     def initUI(self):
         layout = QVBoxLayout()
@@ -411,11 +414,21 @@ class SatelliteImageViewer(QWidget):
         self.thread.finished.connect(self.on_image_load_complete)  # Connect the finished signal here
         self.thread.set_center_position(self.center_position)
         self.thread.start()
+        # Start the thumbnail update timer
+        self.thumbnail_update_timer.start(1000)  # Update every 1000 ms (1 second)
+
 
     def on_image_load_complete(self):
         self.download_image_button.setEnabled(True)
         self.image_loaded = True
         self.update_thumbnail()
+        self.thumbnail_update_timer.stop()  # Stop the timer when loading is complete
+
+    def update_thumbnail_while_loading(self):
+        if self.thread and self.thread.isRunning():
+            self.update_thumbnail()
+        else:
+            self.thumbnail_update_timer.stop()
 
     def update_image(self, pixmap, position):
         """
