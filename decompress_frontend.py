@@ -8,7 +8,7 @@ from PyQt5.QtGui import QPixmap, QImage, QBrush, QColor,QPainter,QPen # Import Q
 from PyQt5.QtCore import  Qt, QPoint, QRectF, QEvent,QTimer, QPropertyAnimation, QEasingCurve, QThread # 添加 QEvent 导入
 import torch
 from decompress_backend import ImageLoaderThread, ImageSaverWorker  # Importing from backend
-
+import subprocess
 from decompress_images import load_model  # Assuming decompress_images is part of backend dependencies
 
 class SatelliteImageViewer(QWidget):
