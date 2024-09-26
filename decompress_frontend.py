@@ -352,12 +352,14 @@ class SatelliteImageViewer(QWidget):
 
     def load_prefixes(self):
         prefixes = set()
-        for filename in os.listdir(self.bin_path):
-            if filename.endswith('.bin'):
-                parts = filename.split('_')
-                if len(parts) >= 3:
-                    prefix = '_'.join(parts[:-2])
-                    prefixes.add(prefix)
+        # 遍历压缩文件夹及其子文件夹
+        for root, dirs, files in os.walk(self.bin_path):
+            for filename in files:
+                if filename.endswith('.bin'):
+                    parts = filename.split('_')
+                    if len(parts) >= 3:
+                        prefix = '_'.join(parts[:-2])
+                        prefixes.add(prefix)
         self.prefix_combo.addItems(sorted(prefixes))
 
     def load_image(self):
