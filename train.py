@@ -225,7 +225,7 @@ def train_one_epoch(
                     f"{i*len(d)}/{len(train_dataloader.dataset)}"
                     f" ({100. * i / len(train_dataloader):.0f}%)]"
                     f'\tLoss: {out_criterion["loss"].item():.3f} |'
-                    f'\tMSE loss: {out_criterion["mse_loss"].item():.3f} |'
+                    f'\tMSE loss: {out_criterion["mse_loss"].item():.4f} |'
                     f'\tBpp loss: {out_criterion["bpp_loss"].item():.2f} |'
                     f"\tAux loss: {aux_loss.item():.2f} |"
                     f"\tCompressed size: {estimated_size:.2f} bytes"
@@ -235,7 +235,7 @@ def train_one_epoch(
                     f"Train epoch {epoch}: ["
                     f"{i*len(d)}/{len(train_dataloader.dataset)}"
                     f" ({100. * i / len(train_dataloader):.0f}%)]"
-                    f'\tLoss: {out_criterion["loss"].item():.3f} |'
+                    f'\tLoss: {out_criterion["loss"].item():.4f} |'
                     f'\tMS_SSIM loss: {out_criterion["ms_ssim_loss"].item():.3f} |'
                     f'\tBpp loss: {out_criterion["bpp_loss"].item():.2f} |'
                     f"\tAux loss: {aux_loss.item():.2f} |"
@@ -285,7 +285,7 @@ def parse_args(argv):
         "-n",
         "--num-workers",
         type=int,
-        default=20,
+        default=8,
         help="Dataloaders threads (default: %(default)s)",
     )
     parser.add_argument(
@@ -344,6 +344,9 @@ def parse_args(argv):
     parser.add_argument(
         "--continue_train", action="store_true", default=True
     )
+    parser.add_argument(
+        "--datasetsplit", action="store_true", default=1, help="Split the dataset into shards"
+    )
     args = parser.parse_args(argv)
     return args
 
@@ -400,7 +403,7 @@ def main(argv):
 
     best_loss = float("inf")
     for epoch in range(last_epoch, args.epochs):
-        num_shards = 10  # Split the dataset into 10 shards
+        num_shards = args.datasetsplit  # Split the dataset into 10 shards
         for shard_index in range(num_shards):
             train_dataset = ImageFolder(args.dataset, transform=train_transforms, num_shards=num_shards, shard_index=shard_index)
     

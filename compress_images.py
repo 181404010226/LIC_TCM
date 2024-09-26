@@ -12,7 +12,7 @@ def parse_args():
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to the checkpoint file")
     parser.add_argument("--input_dir", type=str, default="/root/autodl-tmp/AerialImageDataset/train/images_split", help="Directory containing input images")
     parser.add_argument("--output_dir", type=str, default="compressed", help="Directory to save compressed images")
-    parser.add_argument("--N", type=int, default=128, help="N")
+    parser.add_argument("--N", type=int, default=64, help="N")
     parser.add_argument("--cuda", action="store_true", help="Use CUDA if available")
     return parser.parse_args()
 
