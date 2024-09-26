@@ -391,8 +391,15 @@ class SatelliteImageViewer(QWidget):
         for root, dirs, files in os.walk(self.bin_path):
             for filename in files:
                 if filename.endswith('.bin'):
-                    bin_files.append(os.path.join(root, filename))
-                    
+                    parts = filename.split('_')
+                    if len(parts) >= 3 and '_'.join(parts[:-2]) == prefix and filename.endswith(".bin"):
+                        try:
+                            i = int(parts[-2])
+                            j = int(parts[-1].replace(".bin", ""))
+                            bin_files.append((i, j, os.path.join(root, filename)))
+                        except ValueError:
+                            continue
+
         if not bin_files:
             print(f"No bin files found with prefix {prefix} in {self.bin_path}")
             return

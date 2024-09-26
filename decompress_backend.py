@@ -110,8 +110,8 @@ class ImageLoaderThread(QThread):
                             continue
                         self.loaded_images.add(bin_path)  # 提交时标记为已加载
 
-                    json_filename = f"{os.path.splitext(os.path.basename(bin_path))[0]}.json"
-                    json_path = os.path.join(self.bin_path, json_filename)
+                    json_path= f"{os.path.splitext(os.path.abspath(bin_path))[0]}.json"
+
                     if not os.path.exists(json_path):
                         print(f"JSON file {json_path} not found for bin file {bin_path}. Skipping.")
                         continue
