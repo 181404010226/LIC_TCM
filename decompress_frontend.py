@@ -43,19 +43,20 @@ class SatelliteImageViewer(QWidget):
         self.prefix_combo = QComboBox()
         self.prefix_combo.addItem("None")  # Add "None" as the default option
         self.load_prefixes()
-        self.prefix_combo.currentIndexChanged.connect(self.load_image)
+       # 使用 lambda 忽略传递的 index 参数
+        self.prefix_combo.currentIndexChanged.connect(lambda _: self.load_image())
         input_layout.addWidget(self.load_label)
         input_layout.addWidget(self.prefix_combo)
 
-        # 新增的按钮
-        self.open_folder_button = QPushButton("打开源文件夹")
-        self.open_folder_button.clicked.connect(self.open_source_folder)
+        # 修改后的按钮
+        self.select_image_button = QPushButton("选择多块卫星图")
+        self.select_image_button.clicked.connect(self.select_satellite_image)
 
         self.download_image_button = QPushButton("保存完整图片")
         self.download_image_button.setEnabled(False)  # 初始状态为不可点击
         self.download_image_button.clicked.connect(self.download_full_image)
 
-        input_layout.addWidget(self.open_folder_button)
+        input_layout.addWidget(self.select_image_button)
         input_layout.addWidget(self.download_image_button)
 
         # Create QGraphicsView and QGraphicsScene to display images
@@ -220,15 +221,38 @@ class SatelliteImageViewer(QWidget):
         rect_item.setData(0, 'viewport_rect')
         self.thumbnail_scene.addItem(rect_item)
 
-    def open_source_folder(self):
-        # 打开存储 bin 文件的文件夹
-        path = os.path.abspath(self.bin_path)
-        if sys.platform == 'win32':
-            os.startfile(path)
-        elif sys.platform == 'darwin':
-            subprocess.Popen(['open', path])
-        else:
-            subprocess.Popen(['xdg-open', path])
+    def select_satellite_image(self):
+        # 打开文件对话框，让用户选择一个或多个 bin 文件
+        options = QFileDialog.Options()
+        options |= QFileDialog.ReadOnly
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "选择一块卫星图",
+            self.bin_path,
+            "Bin Files (*.bin);;All Files (*)",
+            options=options
+        )
+        if not files:
+            return  # 用户取消了选择
+
+        # 解析选中的 bin 文件，提取前缀和位置信息
+        bin_files = []
+        for file_path in files:
+            prefix, i, j = self.parse_bin_filename(os.path.basename(file_path))
+            if prefix and i is not None and j is not None:
+                bin_files.append((i, j, file_path))
+            else:
+                print(f"无法解析文件名: {file_path}")
+
+        if not bin_files:
+            print("未选择有效的 bin 文件。")
+            return
+
+        # 清空当前前缀选择
+        self.prefix_combo.setCurrentIndex(0)  # 设置为 "None"
+
+        # 加载选中的 bin 文件
+        self.load_image(bin_files=bin_files)
 
     def download_full_image(self):
         if self.image_loaded:
@@ -362,65 +386,94 @@ class SatelliteImageViewer(QWidget):
                         prefixes.add(prefix)
         self.prefix_combo.addItems(sorted(prefixes))
 
-    def load_image(self):
-        prefix = self.prefix_combo.currentText()
-        if prefix == "None":
-            return  # Do nothing if "None" is selected
-        # Stop existing thread if running
+    def load_image(self, bin_files=None):
+        """
+        加载图像。可以通过传递 bin_files 参数来指定要加载的 bin 文件列表。
+        如果 bin_files 为 None，则根据当前选择的前缀加载所有相关的 bin 文件。
+        """
+        if bin_files is None:
+            # 从前缀组合框获取前缀
+            prefix = self.prefix_combo.currentText()
+            if prefix == "None":
+                return  # 如果选择为 "None"，则不加载任何图像
+
+            # 收集具有指定前缀的 bin 文件
+            bin_files = []
+            for root, dirs, files in os.walk(self.bin_path):
+                for filename in files:
+                    if filename.endswith('.bin'):
+                        parsed = self.parse_bin_filename(filename)
+                        if parsed:
+                            file_prefix, i, j = parsed
+                            if file_prefix == prefix:
+                                bin_files.append((i, j, os.path.join(root, filename)))
+
+            if not bin_files:
+                print(f"No bin files found with prefix {prefix} in {self.bin_path}")
+                return
+
+        else:
+            # 如果 bin_files 已经被提供（来自选择的文件），则无需过滤前缀
+            pass
+
+        # 停止现有的线程（如果有）
         if self.thread and self.thread.isRunning():
             self.thread.stop()
             self.thread.wait()
             try:
                 self.thread.progress_image.disconnect(self.update_image)
             except TypeError:
-                # The signal was already disconnected
+                # 信号已经断开
                 pass
+
         # 设置缩略图为灰色
         self.set_gray_thumbnail()
-
-        prefix = self.prefix_combo.currentText()
-        if not prefix:
-            return
 
         if self.net is None:
             self.net = load_model(self.checkpoint, self.device, self.N)
 
-        # Collect bin files
-        bin_files = []
-        # 从以前缀命名的子文件夹中获取bin文件
-        for root, dirs, files in os.walk(self.bin_path):
-            for filename in files:
-                if filename.endswith('.bin'):
-                    parts = filename.split('_')
-                    if len(parts) >= 3 and '_'.join(parts[:-2]) == prefix and filename.endswith(".bin"):
-                        try:
-                            i = int(parts[-2])
-                            j = int(parts[-1].replace(".bin", ""))
-                            bin_files.append((i, j, os.path.join(root, filename)))
-                        except ValueError:
-                            continue
-
-        if not bin_files:
-            print(f"No bin files found with prefix {prefix} in {self.bin_path}")
-            return
-
-        # Sort bin files
+        # 排序 bin 文件
         bin_files.sort()
 
-        # Clear existing scene
+        # 清除现有场景
         self.scene.clear()
         self.refresh_black_canvas()
 
         self.download_image_button.setEnabled(False)
         self.image_loaded = False
-        # Start the image loading thread
+
+        # 启动图像加载线程
         self.thread = ImageLoaderThread(self.net, bin_files, self.bin_path, self.grid_size, self.device)
         self.thread.progress_image.connect(self.update_image)
-        self.thread.finished.connect(self.on_image_load_complete)  # Connect the finished signal here
+        self.thread.finished.connect(self.on_image_load_complete)  # 连接完成信号
         self.thread.set_center_position(self.center_position)
         self.thread.start()
-        # Start the thumbnail update timer
-        self.thumbnail_update_timer.start(1000)  # Update every 1000 ms (1 second)
+
+        # 启动缩略图更新定时器
+        self.thumbnail_update_timer.start(1000)  # 每1000毫秒更新一次
+
+    def parse_bin_filename(self, filename):
+        """
+        解析 bin 文件名，提取前缀和位置信息。
+
+        返回:
+            tuple: (prefix, i, j) 如果解析成功
+            None: 如果解析失败
+        """
+        if not filename.endswith('.bin'):
+            return None
+
+        parts = filename.split('_')
+        if len(parts) < 3:
+            return None
+
+        try:
+            i = int(parts[-2])
+            j = int(parts[-1].replace(".bin", ""))
+            prefix = '_'.join(parts[:-2])
+            return prefix, i, j
+        except ValueError:
+            return None
 
 
     def on_image_load_complete(self):
