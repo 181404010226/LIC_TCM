@@ -16,8 +16,11 @@ python compressToTar.py --input_dir compressed --output_zip output.tar
 # 解压图片
 python decompress_images.py --prefix austin10 --bin_path compressedBIN --checkpoint save/0.05checkpoint_best.pth.tar --output output_image.png --cuda --N 64
 
+# 评估
+python eval.py --model save/0.05checkpoint_best.pth.tar --image output\austin1_0_0.png --output output_image_restored.png --cuda
+
 #windows
 $env:CUDA_VISIBLE_DEVICES=0
-python -u train.py -d D:\visualStudioResposity\LIC_TCM\cropped_images `
---cuda --N 64 --lambda 0.05 --epochs 3 --lr_epoch 1 2 `
-    --save_path D:\visualStudioResposity\LIC_TCM\3dtilesave --save
+python -u train.py -d D:\VisutalStudio\repository\LIC_TCM\output `
+--cuda --N 64 --lambda 0.05 --epochs 10 --lr_epoch 5 8 `
+--save_path D:\VisutalStudio\repository\LIC_TCM\save --save

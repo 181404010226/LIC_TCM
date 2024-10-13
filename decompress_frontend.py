@@ -17,14 +17,14 @@ class SatelliteImageViewer(QWidget):
         self.net = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.grid_size = 19
-        self.bin_path = "compressedBIN"  # Directory containing bin files
+        self.bin_path = "classified_BIN"  # Directory containing bin files
         self.checkpoint = "save/0.05checkpoint_best.pth.tar"  # Model checkpoint file
         self.N = 64
         self.last_mouse_position = QPoint()
         self.is_right_mouse_pressed = False
         self.scale_factor = 1.0
         self.thread = None  # Reference to the current thread
-        self.center_position = (19*128, 19*128)
+        self.center_position = (0, 0)
         self.initUI()
         self.graphics_view.horizontalScrollBar().valueChanged.connect(self.update_thumbnail_viewport)
         self.graphics_view.verticalScrollBar().valueChanged.connect(self.update_thumbnail_viewport)
