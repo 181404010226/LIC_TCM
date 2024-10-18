@@ -1,15 +1,17 @@
 import sys
 import os
+from PyQt5.QtCore import pyqtSlot
 from PyQt5.QtWidgets import (
     QProgressDialog,QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QComboBox, QSizePolicy,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QPushButton,QFileDialog,QGraphicsRectItem
 )
 from PyQt5.QtGui import QPixmap, QImage, QBrush, QColor,QPainter,QPen # Import QBrush and QColor
-from PyQt5.QtCore import  Qt, QPoint, QRectF, QEvent,QTimer, QPropertyAnimation, QEasingCurve, QThread # 添加 QEvent 导入
+from PyQt5.QtCore import  Qt, QPoint, QRectF, QEvent,QTimer, QPropertyAnimation, QEasingCurve, QThread,QMetaObject # 添加 QEvent 导入
 import torch
 from decompress_backend import ImageLoaderThread, ImageSaverWorker  # Importing from backend
 import subprocess
 from decompress_images import load_model  # Assuming decompress_images is part of backend dependencies
+
 
 class SatelliteImageViewer(QWidget):
     def __init__(self):
@@ -20,6 +22,9 @@ class SatelliteImageViewer(QWidget):
         self.bin_path = "classified_BIN"  # Directory containing bin files
         self.checkpoint = "save/0.05checkpoint_best.pth.tar"  # Model checkpoint file
         self.N = 64
+        self.total_size = 0
+        self.loading_blocks = {}
+        self.size_label = None
         self.last_mouse_position = QPoint()
         self.is_right_mouse_pressed = False
         self.scale_factor = 1.0
@@ -64,6 +69,7 @@ class SatelliteImageViewer(QWidget):
         self.graphics_view.setAlignment(Qt.AlignCenter)
         self.graphics_view.setDragMode(QGraphicsView.NoDrag)
         self.graphics_view.viewport().installEventFilter(self)
+  
 
         self.scene = QGraphicsScene()
 
@@ -71,7 +77,10 @@ class SatelliteImageViewer(QWidget):
         self.scene.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
         self.refresh_black_canvas()
 
-        self.graphics_view.setScene(self.scene)
+        self.graphics_view.setScene(self.scene)      
+        # 将视图中心设置到场景中心
+        self.graphics_view.centerOn(self.center_position[0], self.center_position[1])
+        
     
         self.setLayout(layout)
         self.setGeometry(100, 100, 1024, 768)
@@ -85,11 +94,33 @@ class SatelliteImageViewer(QWidget):
         self.scale_label.setFixedWidth(50)
         self.scale_label.setAlignment(Qt.AlignCenter)
 
-        # 创建布局
-        graphics_layout = QHBoxLayout()
-        graphics_layout.addWidget(self.scale_label)
-        graphics_layout.addWidget(self.graphics_view)
-        layout.addLayout(graphics_layout)
+        # 创建总大小标签
+        self.size_label = QLabel()
+        self.size_label.setStyleSheet("""
+            background-color: rgba(255, 255, 255, 180);
+            padding: 5px;
+            font-size: 16px;
+            font-weight: bold;
+        """)
+        self.size_label.setAlignment(Qt.AlignCenter)
+
+        # 创建左侧标签容器
+        left_labels_container = QWidget()
+        left_labels_layout = QVBoxLayout(left_labels_container)
+        left_labels_layout.addWidget(self.size_label)
+        left_labels_layout.addStretch(1)  # 添加弹性空间
+        left_labels_layout.addWidget(self.scale_label)
+        left_labels_layout.addStretch(1)  # 添加弹性空间
+        left_labels_container.setFixedWidth(60)  # 设置固定宽度
+
+        # 创建主布局
+        main_layout = QHBoxLayout()
+        main_layout.addWidget(left_labels_container)
+        main_layout.addWidget(self.graphics_view)
+        layout.addLayout(main_layout)
+
+        # 确保总大小标签始终在最上层
+        self.size_label.raise_()
 
     def update_scale_label(self):
         scale_text = f"{self.scale_factor:.2f}x"
@@ -367,12 +398,10 @@ class SatelliteImageViewer(QWidget):
         return super().eventFilter(source, event)
 
     def refresh_black_canvas(self):
-        canvas_size = 256 * self.grid_size  # Ensure the canvas covers the entire grid
+        canvas_size = 256 * self.grid_size
         self.scene.setSceneRect(0, 0, canvas_size, canvas_size)
-        black_rect = self.scene.addRect(
-            QRectF(0, 0, canvas_size, canvas_size),
-            brush=QBrush(QColor(0, 0, 0))
-        )
+        # 更新未加载块的显示
+        self.update_loading_blocks()
 
     def load_prefixes(self):
         prefixes = set()
@@ -415,6 +444,15 @@ class SatelliteImageViewer(QWidget):
         else:
             # 如果 bin_files 已经被提供（来自选择的文件），则无需过滤前缀
             pass
+
+        # 计算总大小
+        self.total_size = sum(os.path.getsize(file) for _, _, file in bin_files)
+        self.update_size_label()  # 直接调用更新方法，无需使用 QMetaObject.invokeMethod
+
+
+        # 初始化加载块信息
+        self.loading_blocks = {(i, j): os.path.getsize(file) for i, j, file in bin_files}
+
 
         # 停止现有的线程（如果有）
         if self.thread and self.thread.isRunning():
@@ -488,19 +526,50 @@ class SatelliteImageViewer(QWidget):
         else:
             self.thumbnail_update_timer.stop()
 
+    def update_size_label(self):
+        if self.size_label is not None:
+            total_size_mb = self.total_size / (1024 * 1024)
+            vertical_text = '\n'.join(f"总大小: {total_size_mb:.2f} MB")
+            self.size_label.setText(vertical_text)
+            self.size_label.adjustSize()
+            self.size_label.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # 在窗口大小变化时，确保 size_label 始终在左上角
+        if self.size_label:
+            self.size_label.move(10, 10)
+            self.size_label.raise_()
+
     def update_image(self, pixmap, position):
-        """
-        接收单个图像及其位置，并将其添加到场景中。
-        """
-        # 计算图像在场景中的位置
         x, y = position
         item = QGraphicsPixmapItem(pixmap)
-        item.setPos(x * 256, y * 256)  # 假设每张图片的尺寸为256x256
+        item.setPos(x * 256, y * 256)
         self.scene.addItem(item)
 
-    def refresh_image(self):
-        # 不再需要，因为每个图像独立添加
-        pass
+        # 移除已加载块的信息
+        if (x, y) in self.loading_blocks:
+            del self.loading_blocks[x, y]
+
+
+    def update_loading_blocks(self):
+        for (x, y), size in self.loading_blocks.items():
+            size_kb = size / 1024
+            text_item = self.scene.addText(f"加载中\n{size_kb:.2f} KB")
+            text_item.setPos(x * 256, y * 256)
+            text_item.setDefaultTextColor(Qt.white)
+            
+            # 设置更大的字体
+            font = text_item.font()
+            font.setPointSize(14)  # 增大字体大小
+            text_item.setFont(font)
+            
+            # 添加半透明背景
+            rect = text_item.boundingRect()
+            background = QGraphicsRectItem(rect)
+            background.setBrush(QBrush(QColor(0, 0, 0, 128)))
+            background.setParentItem(text_item)
+            background.setZValue(-1)  # 确保背景在文本后面
 
 
     def update_center_position(self):

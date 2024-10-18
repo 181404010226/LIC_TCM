@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+图像read/
 *.py[cod]
 *$py.class
 run.sh
